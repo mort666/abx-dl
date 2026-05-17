@@ -591,7 +591,6 @@ def _record_key(record: VisibleRecord) -> str:
 def _is_binary_provider_hook_name(hook_name: str) -> bool:
     return hook_name.startswith("on_BinaryRequest__")
 
-@async_to_sync
 async def _phase_label_for_event(bus, event) -> str:
     phase_names = {
         "CrawlSetupEvent": "CrawlSetup",
@@ -814,15 +813,11 @@ class LiveBusUI:
         self.ui_console.print(f"[dim]Plugins: {plugins_label}[/dim]")
         self.ui_console.print()
 
-    @async_to_sync
-    async def _get_archive_results(self, past: bool):
-        return await self.bus.filter(ArchiveResultEvent, past)
-
-    def print_summary(self, *, output_dir: Path) -> None:
+    async def print_summary(self, *, output_dir: Path):
         if not self.interactive_tty:
             return
           
-        archive_results = self._get_archive_results(past=True)
+        archive_results = await self.bus.filter(ArchiveResultEvent, past=True)
             
         self.ui_console.print()
         self.ui_console.print(
@@ -853,11 +848,10 @@ class LiveBusUI:
         )
         self.streamed_header = True
     
-    @async_to_sync
     async def _match_row_key(
         self,
         event: BinaryRequestEvent | BinaryEvent | ArchiveResultEvent | ProcessCompletedEvent | ProcessStdoutEvent,
-    ) -> str | None:
+    ) -> str:
         parent_id = event.event_parent_id or ""
         checked_ids: set[str] = set()
         while parent_id and parent_id not in checked_ids:
@@ -871,7 +865,7 @@ class LiveBusUI:
         binary_name = event.name if isinstance(event, (BinaryRequestEvent, BinaryEvent)) else ""
         if binary_name and self.pending_binary_rows.get(binary_name):
             return self.pending_binary_rows[binary_name][0]
-        return None
+        return ""
 
     def _apply_archive_result(self, row: _LiveProcessRecord, event: ArchiveResultEvent) -> None:
         row.final_status = event.status or row.final_status
@@ -898,7 +892,7 @@ class LiveBusUI:
             plugin=event.plugin_name,
             hook_name=event.hook_name,
             timeout=event.timeout,
-            phase=_phase_label_for_event(self.bus, event),
+            phase= await _phase_label_for_event(self.bus, event),
             started_at=event.start_ts or datetime.now().isoformat(),
             cmd=[event.hook_path, *event.hook_args],
         )
@@ -911,8 +905,8 @@ class LiveBusUI:
     async def on_BinaryRequestEvent(self, event: BinaryRequestEvent) -> None:
         if self.progress is None or self.task_id is None:
             return
-        row_key = self._match_row_key(event)
-        if row_key is None:
+        row_key =await self._match_row_key(event)
+        if row_key == "":
             self.binary_row_num += 1
             row_key = f"binary:{self.binary_row_num}"
             self.pending_binary_rows[event.name].append(row_key)
@@ -946,8 +940,8 @@ class LiveBusUI:
     async def on_BinaryEvent(self, event: BinaryEvent) -> None:
         if self.progress is None or self.task_id is None:
             return
-        row_key = self._match_row_key(event)
-        if row_key is None:
+        row_key = await self._match_row_key(event)
+        if row_key == "":
             self.binary_row_num += 1
             row_key = f"binary:{self.binary_row_num}"
         elif self.pending_binary_rows[event.name] and self.pending_binary_rows[event.name][0] == row_key:
@@ -995,8 +989,8 @@ class LiveBusUI:
         self._refresh_live(force=True)
 
     async def on_ArchiveResultEvent(self, event: ArchiveResultEvent) -> None:
-        row_key = self._match_row_key(event)
-        if row_key is None:
+        row_key =await self._match_row_key(event)
+        if row_key == "":
             return
         self.row_key_by_event_id[event.event_id] = row_key
         existing = self.live_results.get(row_key)
@@ -1007,8 +1001,8 @@ class LiveBusUI:
     async def on_ProcessStdoutEvent(self, event: ProcessStdoutEvent) -> None:
         if _is_binary_provider_hook_name(event.hook_name):
             return
-        row_key = self._match_row_key(event)
-        if row_key is None:
+        row_key =await self._match_row_key(event)
+        if row_key == "":
             return
         line = event.line.strip()
         if not line or line.startswith("{"):
@@ -1020,8 +1014,8 @@ class LiveBusUI:
     async def on_ProcessCompletedEvent(self, event: ProcessCompletedEvent) -> None:
         if _is_binary_provider_hook_name(event.hook_name) or self.progress is None or self.task_id is None:
             return
-        row_key = self._match_row_key(event)
-        if row_key is None:
+        row_key = await self._match_row_key(event)
+        if row_key == "":
             row_key = f"process:completed:{len(self.live_results) + 1}"
         self.row_key_by_event_id[event.event_id] = row_key
         existing = self.live_results.get(row_key)
@@ -1033,7 +1027,7 @@ class LiveBusUI:
                 plugin=event.plugin_name,
                 hook_name=event.hook_name,
                 timeout=self.timeout_seconds,
-                phase=_phase_label_for_event(self.bus, event),
+                phase=await _phase_label_for_event(self.bus, event),
             )
         )
         row.started_at = event.start_ts or row.started_at
@@ -1337,7 +1331,7 @@ def dl(
 
     if aborted:
         raise click.Abort()
-    live_ui.print_summary(output_dir=out_path)
+    asyncio.run(live_ui.print_summary(output_dir=out_path))
 
 
 class _BinaryRecord:

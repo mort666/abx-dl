@@ -9,6 +9,7 @@ import re
 import signal
 import sys
 import time
+import inspect
 from collections import defaultdict, deque
 from contextlib import nullcontext
 from dataclasses import dataclass, field as dataclass_field
@@ -18,6 +19,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TypeVar
 from collections.abc import Callable, Mapping
+from asgiref.sync import async_to_sync
 
 import rich_click as click
 from rich.console import Console, Group
@@ -815,7 +817,12 @@ class LiveBusUI:
     def print_summary(self, *, output_dir: Path) -> None:
         if not self.interactive_tty:
             return
-        archive_results = self.bus.filter(ArchiveResultEvent, past=True)
+          
+        if inspect.isawaitable(self.bus.filter):
+            archive_results = async_to_sync(self.bus.filter)(ArchiveResultEvent, past=True)
+        else:
+            archive_results = self.bus.filter(ArchiveResultEvent, past=True)
+            
         self.ui_console.print()
         self.ui_console.print(
             f"[green]{sum(1 for r in archive_results if r.status == 'succeeded')} succeeded[/green], "

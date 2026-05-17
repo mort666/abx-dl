@@ -591,8 +591,8 @@ def _record_key(record: VisibleRecord) -> str:
 def _is_binary_provider_hook_name(hook_name: str) -> bool:
     return hook_name.startswith("on_BinaryRequest__")
 
-
-def _phase_label_for_event(bus, event) -> str:
+@async_to_sync
+async def _phase_label_for_event(bus, event) -> str:
     phase_names = {
         "CrawlSetupEvent": "CrawlSetup",
         "SnapshotEvent": "Snapshot",
@@ -609,7 +609,7 @@ def _phase_label_for_event(bus, event) -> str:
         if not parent_id or parent_id in checked_ids:
             break
         checked_ids.add(parent_id)
-        current = bus.find("*", event_id=parent_id, past=True)
+        current = await bus.find("*", event_id=parent_id, past=True)
 
     return ""
 
@@ -814,14 +814,15 @@ class LiveBusUI:
         self.ui_console.print(f"[dim]Plugins: {plugins_label}[/dim]")
         self.ui_console.print()
 
+    @async_to_sync
+    async def _get_archive_results(self, past: bool):
+        return await self.bus.filter(ArchiveResultEvent, past)
+
     def print_summary(self, *, output_dir: Path) -> None:
         if not self.interactive_tty:
             return
           
-        if inspect.isawaitable(self.bus.filter):
-            archive_results = async_to_sync(self.bus.filter)(ArchiveResultEvent, past=True)
-        else:
-            archive_results = self.bus.filter(ArchiveResultEvent, past=True)
+        archive_results = self._get_archive_results(past=True)
             
         self.ui_console.print()
         self.ui_console.print(
@@ -851,8 +852,9 @@ class LiveBusUI:
             ),
         )
         self.streamed_header = True
-
-    def _match_row_key(
+    
+    @async_to_sync
+    async def _match_row_key(
         self,
         event: BinaryRequestEvent | BinaryEvent | ArchiveResultEvent | ProcessCompletedEvent | ProcessStdoutEvent,
     ) -> str | None:
@@ -862,7 +864,7 @@ class LiveBusUI:
             checked_ids.add(parent_id)
             if parent_id in self.row_key_by_event_id:
                 return self.row_key_by_event_id[parent_id]
-            parent_event = self.bus.find("*", event_id=parent_id, past=True)
+            parent_event = await self.bus.find("*", event_id=parent_id, past=True)
             if parent_event is None:
                 break
             parent_id = parent_event.event_parent_id or ""
@@ -1322,7 +1324,7 @@ def dl(
                 aborted = True
                 loop.run_until_complete(asyncio.gather(download_task, return_exceptions=True))
             finally:
-                aborted = aborted or bus.find(CrawlAbortEvent, past=True) is not None
+                aborted = aborted or asyncio.run(bus.find(CrawlAbortEvent, past=True)) is not None
                 if debug:
                     bus.log_tree()
                 loop.run_until_complete(bus.wait_until_idle())
